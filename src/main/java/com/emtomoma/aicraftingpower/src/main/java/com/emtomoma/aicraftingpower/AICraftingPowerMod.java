@@ -1,7 +1,7 @@
 package com.emtomoma.aicraftingpower;
 
 import com.google.gson.Gson;
-import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.component.DataComponents;
@@ -19,7 +19,6 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.entity.living.LivingDamageEvent;
-import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 import net.neoforged.neoforge.event.tick.PlayerTickEvent;
 
@@ -45,25 +44,22 @@ public class AICraftingPowerMod {
         NeoForge.EVENT_BUS.register(this);
     }
 
-    // 1. AUTOMATICKÁ DETEKCE AI ITEMU V RUCE HRÁČE (funguje vždy!)
     @SubscribeEvent
     public void onPlayerTick(PlayerTickEvent.Post event) {
         Player player = event.getEntity();
         if (player.level().isClientSide() || !(player.level() instanceof ServerLevel serverLevel)) return;
-        if (player.tickCount % 20 != 0) return; // Kontrola každou 1 sekundu
+        if (player.tickCount % 20 != 0) return;
 
         ItemStack stack = player.getMainHandItem();
         if (stack.isEmpty()) return;
 
         ResourceLocation itemId = BuiltInRegistries.ITEM.getKey(stack.getItem());
-        // Kontroluje, zda item pochází z AI Crafting Table modu
         if (!itemId.getNamespace().contains("ai") && !itemId.getPath().contains("ai_")) return;
 
         CustomData existingData = stack.get(DataComponents.CUSTOM_DATA);
         CompoundTag tag = existingData != null ? existingData.copyTag() : new CompoundTag();
         if (tag.contains("ai_func_id") || tag.getBoolean("ai_generating")) return;
 
-        // Označí item, že se pro něj právě generuje funkce
         tag.putBoolean("ai_generating", true);
         stack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
 
@@ -98,32 +94,48 @@ public class AICraftingPowerMod {
 
             JsonObject json = GSON.fromJson(body, JsonObject.class);
             if (json.has("popis")) popis = json.get("popis").getAsString();
-            if (json.has("on_use_commands")) json.getAsJsonArray("on_use_commands").forEach(e -> useCmds.add(e.getAsString()));
-            if (json.has("on_hit_commands")) json.getAsJsonArray("on_hit_commands").forEach(e -> hitCmds.add(e.getAsString()));
+            if (json.has("on_use_commands")) {
+                for (JsonElement e : json.getAsJsonArray("on_use_commands")) {
+                    useCmds.add(e.getAsString());
+                }
+            }
+            if (json.has("on_hit_commands")) {
+                for (JsonElement e : json.getAsJsonArray("on_hit_commands")) {
+                    hitCmds.add(e.getAsString());
+                }
+            }
         } catch (Exception ignored) {
-            // Záložní generátor podle názvu itemu, pokud AI server neodpoví včas
             String lower = (itemName + " " + loreText).toLowerCase();
             if (lower.contains("nether") || lower.contains("star") || lower.contains("hvězd") || lower.contains("wither")) {
                 popis = "Hvězdná bouře (blesky a síla)";
-                useCmds = List.of("effect give @s fire_resistance 4 1 true", "effect give @s resistance 3 4 true", "effect give @s strength 10 2 true", "execute anchored eyes positioned ^ ^ ^12 run summon lightning_bolt ~ ~ ~");
-                hitCmds = List.of("effect give @s fire_resistance 3 1 true", "execute at @s run summon lightning_bolt ~ ~ ~");
+                useCmds.add("effect give @s fire_resistance 4 1 true");
+                useCmds.add("effect give @s resistance 3 4 true");
+                useCmds.add("effect give @s strength 10 2 true");
+                useCmds.add("execute anchored eyes positioned ^ ^ ^12 run summon lightning_bolt ~ ~ ~");
+                hitCmds.add("effect give @s fire_resistance 3 1 true");
+                hitCmds.add("execute at @s run summon lightning_bolt ~ ~ ~");
             } else if (lower.contains("tnt") || lower.contains("boom") || lower.contains("výbu") || lower.contains("exploz")) {
                 popis = "Výbušný úder TNT";
-                useCmds = List.of("effect give @s resistance 2 4 true", "execute anchored eyes positioned ^ ^ ^6 run summon tnt ~ ~ ~ {fuse:10}");
-                hitCmds = List.of("effect give @s resistance 2 4 true", "execute at @s run summon tnt ~ ~ ~ {fuse:0}");
+                useCmds.add("effect give @s resistance 2 4 true");
+                useCmds.add("execute anchored eyes positioned ^ ^ ^6 run summon tnt ~ ~ ~ {fuse:10}");
+                hitCmds.add("effect give @s resistance 2 4 true");
+                hitCmds.add("execute at @s run summon tnt ~ ~ ~ {fuse:0}");
             } else if (lower.contains("ender") || lower.contains("pearl") || lower.contains("teleport")) {
                 popis = "Ender teleportace";
-                useCmds = List.of("execute at @s positioned ^ ^ ^12 run tp @s ~ ~ ~", "execute at @s run playsound minecraft:entity.enderman.teleport master @a ~ ~ ~");
-                hitCmds = List.of("execute at @s run tp @s ~ ~6 ~");
+                useCmds.add("execute at @s positioned ^ ^ ^12 run tp @s ~ ~ ~");
+                useCmds.add("execute at @s run playsound minecraft:entity.enderman.teleport master @a ~ ~ ~");
+                hitCmds.add("execute at @s run tp @s ~ ~6 ~");
             } else {
                 popis = "Bleskový výboj";
-                useCmds = List.of("effect give @s fire_resistance 3 1 true", "execute anchored eyes positioned ^ ^ ^10 run summon lightning_bolt ~ ~ ~");
-                hitCmds = List.of("effect give @s fire_resistance 3 1 true", "execute at @s run summon lightning_bolt ~ ~ ~");
+                useCmds.add("effect give @s fire_resistance 3 1 true");
+                useCmds.add("execute anchored eyes positioned ^ ^ ^10 run summon lightning_bolt ~ ~ ~");
+                hitCmds.add("effect give @s fire_resistance 3 1 true");
+                hitCmds.add("execute at @s run summon lightning_bolt ~ ~ ~");
             }
         }
 
-        final List<String> finalUse = useCmds;
-        final List<String> finalHit = hitCmds;
+        final List<String> finalUse = new ArrayList<>(useCmds);
+        final List<String> finalHit = new ArrayList<>(hitCmds);
         final String finalPopis = popis;
 
         server.execute(() -> {
@@ -142,7 +154,6 @@ public class AICraftingPowerMod {
         });
     }
 
-    // 2. KLIKNUTÍ PRAVÝM TLAČÍTKEM -> SPUŠTĚNÍ FUNKCE USE
     @SubscribeEvent
     public void onRightClick(PlayerInteractEvent.RightClickItem event) {
         Player player = event.getEntity();
@@ -156,7 +167,6 @@ public class AICraftingPowerMod {
         }
     }
 
-    // 3. ÚDER DO HRÁČE NEBO MOBA -> SPUŠTĚNÍ FUNKCE HIT
     @SubscribeEvent
     public void onHitEntity(LivingDamageEvent.Pre event) {
         if (!(event.getSource().getEntity() instanceof Player attacker)) return;
