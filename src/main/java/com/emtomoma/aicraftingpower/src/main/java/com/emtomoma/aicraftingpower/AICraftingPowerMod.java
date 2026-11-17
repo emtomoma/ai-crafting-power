@@ -21,6 +21,7 @@ import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.entity.living.LivingDamageEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
+import net.neoforged.neoforge.event.tick.PlayerTickEvent;
 
 import java.net.URI;
 import java.net.URLEncoder;
@@ -28,6 +29,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -37,53 +39,57 @@ import java.util.concurrent.CompletableFuture;
 public class AICraftingPowerMod {
 
     private static final Gson GSON = new Gson();
-    private static final HttpClient HTTP = HttpClient.newHttpClient();
+    private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
     public AICraftingPowerMod() {
         NeoForge.EVENT_BUS.register(this);
     }
 
+    // 1. AUTOMATICKÁ DETEKCE AI ITEMU V RUCE HRÁČE (funguje vždy!)
     @SubscribeEvent
-    public void onItemCrafted(PlayerEvent.ItemCraftedEvent event) {
+    public void onPlayerTick(PlayerTickEvent.Post event) {
         Player player = event.getEntity();
         if (player.level().isClientSide() || !(player.level() instanceof ServerLevel serverLevel)) return;
+        if (player.tickCount % 20 != 0) return; // Kontrola každou 1 sekundu
 
-        ItemStack result = event.getCrafting();
-        ResourceLocation itemId = BuiltInRegistries.ITEM.getKey(result.getItem());
-        if (!itemId.getNamespace().contains("ai") && !result.has(DataComponents.CUSTOM_NAME)) return;
+        ItemStack stack = player.getMainHandItem();
+        if (stack.isEmpty()) return;
 
-        CustomData existingData = result.get(DataComponents.CUSTOM_DATA);
-        if (existingData != null && existingData.copyTag().contains("ai_func_id")) return;
+        ResourceLocation itemId = BuiltInRegistries.ITEM.getKey(stack.getItem());
+        // Kontroluje, zda item pochází z AI Crafting Table modu
+        if (!itemId.getNamespace().contains("ai") && !itemId.getPath().contains("ai_")) return;
 
-        List<String> ingredients = new ArrayList<>();
-        for (int i = 0; i < event.getInventory().getContainerSize(); i++) {
-            ItemStack ing = event.getInventory().getItem(i);
-            if (!ing.isEmpty()) {
-                ingredients.add(BuiltInRegistries.ITEM.getKey(ing.getItem()).toString());
-            }
-        }
+        CustomData existingData = stack.get(DataComponents.CUSTOM_DATA);
+        CompoundTag tag = existingData != null ? existingData.copyTag() : new CompoundTag();
+        if (tag.contains("ai_func_id") || tag.getBoolean("ai_generating")) return;
 
-        String itemName = result.getHoverName().getString();
+        // Označí item, že se pro něj právě generuje funkce
+        tag.putBoolean("ai_generating", true);
+        stack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
+
+        String itemName = stack.getHoverName().getString();
+        String loreText = stack.has(DataComponents.LORE) ? stack.get(DataComponents.LORE).lines().toString() : "";
         String funcId = "item_" + UUID.randomUUID().toString().substring(0, 8);
 
-        CompoundTag tag = existingData != null ? existingData.copyTag() : new CompoundTag();
-        tag.putString("ai_func_id", funcId);
-        result.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
+        player.sendSystemMessage(Component.literal("[AI Power] Vymyslim schopnost pro: " + itemName + "...").withStyle(ChatFormatting.AQUA));
 
-        player.sendSystemMessage(Component.literal("[AI Power] Generating ability for: " + itemName + "...").withStyle(ChatFormatting.AQUA));
-
-        CompletableFuture.runAsync(() -> callAI(serverLevel.getServer(), player, result, funcId, itemName, ingredients));
+        CompletableFuture.runAsync(() -> callAI(serverLevel.getServer(), player, stack, funcId, itemName, loreText));
     }
 
-    private void callAI(MinecraftServer server, Player player, ItemStack stack, String funcId, String itemName, List<String> ingredients) {
+    private void callAI(MinecraftServer server, Player player, ItemStack stack, String funcId, String itemName, String loreText) {
+        List<String> useCmds = new ArrayList<>();
+        List<String> hitCmds = new ArrayList<>();
+        String popis = "Specialni AI schopnost!";
+
         try {
             String prompt = AIFunctionManager.SYSTEM_PROMPT_ADDON + "\n" +
-                "Item name: '" + itemName + "', ingredients: " + ingredients + ". " +
-                "Return ONLY pure JSON (write 'popis' in the same language as the item name): {\"popis\": \"short description of ability\", \"on_use_commands\": [...], \"on_hit_commands\": [...]}";
+                "Item name: '" + itemName + "', lore/details: '" + loreText + "'. " +
+                "Return ONLY pure JSON (write 'popis' in Czech or item language): {\"popis\": \"kratky popis schopnosti\", \"on_use_commands\": [...], \"on_hit_commands\": [...]}";
 
             String encoded = URLEncoder.encode(prompt, StandardCharsets.UTF_8);
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create("https://pollinations.ai" + encoded + "?json=true"))
+                    .timeout(Duration.ofSeconds(15))
                     .GET()
                     .build();
 
@@ -91,33 +97,52 @@ public class AICraftingPowerMod {
             String body = res.body().trim().replaceAll("^```[a-zA-Z]*\\n?", "").replaceAll("```$", "").trim();
 
             JsonObject json = GSON.fromJson(body, JsonObject.class);
-            String popis = json.has("popis") ? json.get("popis").getAsString() : "Special AI Ability!";
-
-            List<String> useCmds = new ArrayList<>();
-            if (json.has("on_use_commands")) {
-                JsonArray arr = json.getAsJsonArray("on_use_commands");
-                arr.forEach(e -> useCmds.add(e.getAsString()));
+            if (json.has("popis")) popis = json.get("popis").getAsString();
+            if (json.has("on_use_commands")) json.getAsJsonArray("on_use_commands").forEach(e -> useCmds.add(e.getAsString()));
+            if (json.has("on_hit_commands")) json.getAsJsonArray("on_hit_commands").forEach(e -> hitCmds.add(e.getAsString()));
+        } catch (Exception ignored) {
+            // Záložní generátor podle názvu itemu, pokud AI server neodpoví včas
+            String lower = (itemName + " " + loreText).toLowerCase();
+            if (lower.contains("nether") || lower.contains("star") || lower.contains("hvězd") || lower.contains("wither")) {
+                popis = "Hvězdná bouře (blesky a síla)";
+                useCmds = List.of("effect give @s fire_resistance 4 1 true", "effect give @s resistance 3 4 true", "effect give @s strength 10 2 true", "execute anchored eyes positioned ^ ^ ^12 run summon lightning_bolt ~ ~ ~");
+                hitCmds = List.of("effect give @s fire_resistance 3 1 true", "execute at @s run summon lightning_bolt ~ ~ ~");
+            } else if (lower.contains("tnt") || lower.contains("boom") || lower.contains("výbu") || lower.contains("exploz")) {
+                popis = "Výbušný úder TNT";
+                useCmds = List.of("effect give @s resistance 2 4 true", "execute anchored eyes positioned ^ ^ ^6 run summon tnt ~ ~ ~ {fuse:10}");
+                hitCmds = List.of("effect give @s resistance 2 4 true", "execute at @s run summon tnt ~ ~ ~ {fuse:0}");
+            } else if (lower.contains("ender") || lower.contains("pearl") || lower.contains("teleport")) {
+                popis = "Ender teleportace";
+                useCmds = List.of("execute at @s positioned ^ ^ ^12 run tp @s ~ ~ ~", "execute at @s run playsound minecraft:entity.enderman.teleport master @a ~ ~ ~");
+                hitCmds = List.of("execute at @s run tp @s ~ ~6 ~");
+            } else {
+                popis = "Bleskový výboj";
+                useCmds = List.of("effect give @s fire_resistance 3 1 true", "execute anchored eyes positioned ^ ^ ^10 run summon lightning_bolt ~ ~ ~");
+                hitCmds = List.of("effect give @s fire_resistance 3 1 true", "execute at @s run summon lightning_bolt ~ ~ ~");
             }
-
-            List<String> hitCmds = new ArrayList<>();
-            if (json.has("on_hit_commands")) {
-                JsonArray arr = json.getAsJsonArray("on_hit_commands");
-                arr.forEach(e -> hitCmds.add(e.getAsString()));
-            }
-
-            server.execute(() -> {
-                AIFunctionManager.saveAndReload(server, funcId, useCmds, hitCmds);
-                stack.set(DataComponents.LORE, new ItemLore(List.of(
-                        Component.literal("⚡ " + popis).withStyle(ChatFormatting.GOLD),
-                        Component.literal("Addon by emtomoma").withStyle(ChatFormatting.DARK_GRAY)
-                )));
-                player.sendSystemMessage(Component.literal("[AI Power] Ready: " + popis).withStyle(ChatFormatting.GREEN));
-            });
-        } catch (Exception e) {
-            server.execute(() -> player.sendSystemMessage(Component.literal("[AI Power] AI Error.").withStyle(ChatFormatting.RED)));
         }
+
+        final List<String> finalUse = useCmds;
+        final List<String> finalHit = hitCmds;
+        final String finalPopis = popis;
+
+        server.execute(() -> {
+            AIFunctionManager.saveAndReload(server, funcId, finalUse, finalHit);
+            CustomData cur = stack.get(DataComponents.CUSTOM_DATA);
+            CompoundTag tag = cur != null ? cur.copyTag() : new CompoundTag();
+            tag.remove("ai_generating");
+            tag.putString("ai_func_id", funcId);
+            stack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
+
+            stack.set(DataComponents.LORE, new ItemLore(List.of(
+                    Component.literal("⚡ " + finalPopis).withStyle(ChatFormatting.GOLD),
+                    Component.literal("Addon by emtomoma").withStyle(ChatFormatting.DARK_GRAY)
+            )));
+            player.sendSystemMessage(Component.literal("[AI Power] Schopnost pripravena: " + finalPopis).withStyle(ChatFormatting.GREEN));
+        });
     }
 
+    // 2. KLIKNUTÍ PRAVÝM TLAČÍTKEM -> SPUŠTĚNÍ FUNKCE USE
     @SubscribeEvent
     public void onRightClick(PlayerInteractEvent.RightClickItem event) {
         Player player = event.getEntity();
@@ -131,6 +156,7 @@ public class AICraftingPowerMod {
         }
     }
 
+    // 3. ÚDER DO HRÁČE NEBO MOBA -> SPUŠTĚNÍ FUNKCE HIT
     @SubscribeEvent
     public void onHitEntity(LivingDamageEvent.Pre event) {
         if (!(event.getSource().getEntity() instanceof Player attacker)) return;
