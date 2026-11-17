@@ -1,14 +1,35 @@
 plugins {
     id 'java-library'
-    id 'net.neoforged.moddev' version '2.0.28-beta'
+    id 'net.neoforged.moddev' version '2.0.74'
 }
+
 version = '1.0.0'
 group = 'com.emtomoma.aicraftingpower'
-repositories { mavenCentral() }
-base { archivesName = 'aicraftingpower' }
-java.toolchain.languageVersion = JavaLanguageVersion.of(21)
-neoForge {
-    version = '21.1.72'
-    mods { aicraftingpower { sourceSet sourceSets.main } }
+
+repositories {
+    mavenCentral()
 }
-dependencies { implementation 'com.google.code.gson:gson:2.10.1' }
+
+base {
+    archivesName = 'aicraftingpower'
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+neoForge {
+    version = '21.1.77'
+
+    mods {
+        aicraftingpower {
+            sourceSet(sourceSets.main)
+        }
+    }
+}
+
+dependencies {
+    implementation 'com.google.code.gson:gson:2.10.1'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
