@@ -29,10 +29,11 @@ dependencies {
     implementation 'com.google.code.gson:gson:2.10.1'
 }
 
-// Automatické vygenerování META-INF/neoforge.mods.toml přímo do .jar
-tasks.named('processResources', ProcessResources).configure {
+def generateModsToml = tasks.register('generateModsToml') {
+    def outDir = layout.buildDirectory.dir('generated/modsToml')
+    outputs.dir(outDir)
     doLast {
-        def metaDir = new File(destinationDir, 'META-INF')
+        def metaDir = new File(outDir.get().asFile, 'META-INF')
         metaDir.mkdirs()
         new File(metaDir, 'neoforge.mods.toml').text = '''modLoader="javafml"
 loaderVersion="[4,)"
@@ -60,4 +61,9 @@ description="Addon for AI Crafting Table that generates datapack functions and i
     side="BOTH"
 '''
     }
+}
+
+tasks.named('jar', Jar).configure {
+    dependsOn(generateModsToml)
+    from(generateModsToml)
 }
