@@ -15,4 +15,10 @@ description="Addon for AI Crafting Table that generates datapack functions and i
     versionRange="[21.1,)"
     ordering="NONE"
     side="BOTH"
-    
+
+[[dependencies.aicraftingpower]]
+    modId="minecraft"
+    type="required"
+    versionRange="[1.21.1,1.22)"
+    ordering="NONE"
+    side="BOTH"
