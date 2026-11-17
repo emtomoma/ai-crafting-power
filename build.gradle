@@ -18,7 +18,6 @@ java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
 neoForge {
     version = '21.1.77'
-
     mods {
         aicraftingpower {
             sourceSet(sourceSets.main)
@@ -30,6 +29,35 @@ dependencies {
     implementation 'com.google.code.gson:gson:2.10.1'
 }
 
-tasks.withType(JavaCompile).configureEach {
-    options.encoding = 'UTF-8'
+// Automatické vygenerování META-INF/neoforge.mods.toml přímo do .jar
+tasks.named('processResources', ProcessResources).configure {
+    doLast {
+        def metaDir = new File(destinationDir, 'META-INF')
+        metaDir.mkdirs()
+        new File(metaDir, 'neoforge.mods.toml').text = '''modLoader="javafml"
+loaderVersion="[4,)"
+license="MIT"
+
+[[mods]]
+modId="aicraftingpower"
+version="1.0.0"
+displayName="AI Crafting Table: Power & Function"
+authors="emtomoma"
+description="Addon for AI Crafting Table that generates datapack functions and item abilities using AI."
+
+[[dependencies.aicraftingpower]]
+    modId="neoforge"
+    type="required"
+    versionRange="[21.1,)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.aicraftingpower]]
+    modId="minecraft"
+    type="required"
+    versionRange="[1.21.1,1.22)"
+    ordering="NONE"
+    side="BOTH"
+'''
+    }
 }
